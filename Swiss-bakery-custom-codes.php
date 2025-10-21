@@ -3,7 +3,7 @@
  * Plugin Name: Swiss Bakery Custom Codes
  * Plugin URI: https://nurislam.online
  * Description: Central location for Swiss Bakery custom functionality. Separate PHP files can be dropped into the plugin directory for specific tasks.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: Md. Nur Islam
  * Author URI: https://nurislam.online
  * Text Domain: swiss-bakery-custom-codes
