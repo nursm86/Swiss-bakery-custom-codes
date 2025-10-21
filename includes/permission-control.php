@@ -22,6 +22,7 @@ function sbcc_permission_control_setup_capabilities(): void
         'promote_users',
         'remove_users',
         'send_password_reset',
+        'yith_pos_manage_pos',
     ];
 
     foreach ($caps_to_add as $capability) {
@@ -87,6 +88,7 @@ function sbcc_permission_control_hide_admin_menus(): void
     $menus_to_remove = [
         'edit.php', // Posts
         'edit.php?post_type=page', // Pages
+        'themes.php',
         'nasa-theme-options',
         'edit.php?post_type=portfolio',
         'edit.php?post_type=templates',
@@ -170,7 +172,8 @@ function sbcc_permission_control_hide_pos_store_meta_links(): void
         .wrap .yith-plugin-fw__panel__top-links__help,
         .yith-plugin-fw__panel__top-links__help,
         .yith-plugin-fw__panel__nav__menu-item--help,
-        a.yith-plugin-fw__panel__top-links__button[href*="tab=help"] {
+        a.yith-plugin-fw__panel__top-links__button[href*="tab=help"],
+        a.yith-plugin-fw__panel__top-links__button[href*="tab=dashboard"] {
             display: none !important;
         }
     </style>
@@ -196,8 +199,19 @@ function sbcc_permission_control_filter_yith_panel_args(array $args): array
 
     unset($args['your_store_tools'], $args['help_tab']);
 
+    if (isset($args['admin-tabs']) && !isset($args['admin-tabs']['dashboard'])) {
+        $dashboard_tab = $args['admin-tabs']['dashboard'] ?? [
+            'title'       => __('Dashboard', 'yith-point-of-sale-for-woocommerce'),
+            'icon'        => 'dashboard',
+            'description' => '',
+        ];
+
+        unset($args['admin-tabs']['dashboard']);
+        $args['admin-tabs'] = ['dashboard' => $dashboard_tab] + $args['admin-tabs'];
+    }
+
     if (isset($args['admin-tabs'])) {
-        unset($args['admin-tabs']['your-store-tools'], $args['admin-tabs']['help']);
+        unset($args['admin-tabs']['settings'], $args['admin-tabs']['customization']);
     }
 
     return $args;
@@ -240,6 +254,10 @@ function sbcc_permission_control_customize_admin_bar(WP_Admin_Bar $wp_admin_bar)
         'new-templates',
         'new-portfolio',
         'new-elementor_library',
+        'edit',
+        'edit-page',
+        'elementor_edit_page',
+        'revslider',
     ];
 
     foreach ($nodes_to_remove as $node_id) {
@@ -265,6 +283,7 @@ function sbcc_permission_control_block_admin_user_management(array $caps, string
         'delete_user',
         'promote_user',
         'remove_user',
+        'send_password_reset',
     ];
 
     if (!in_array($cap, $restricted_caps, true)) {
@@ -290,3 +309,136 @@ function sbcc_permission_control_block_admin_user_management(array $caps, string
     return $caps;
 }
 add_filter('map_meta_cap', 'sbcc_permission_control_block_admin_user_management', 10, 4);
+
+/**
+ * Ensure shop managers always have the required user management caps.
+ *
+ * @param array    $all_caps All capabilities for the user.
+ * @param array    $caps Requested primitive capabilities.
+ * @param array    $args Original arguments.
+ * @param WP_User  $user User object.
+ *
+ * @return array
+ */
+function sbcc_permission_control_grant_user_management_caps(array $all_caps, array $caps, array $args, WP_User $user): array
+{
+    if (!sbcc_permission_control_user_is_shop_manager($user->ID)) {
+        return $all_caps;
+    }
+
+    $grant_caps = [
+        'list_users',
+        'edit_users',
+        'create_users',
+        'delete_users',
+        'remove_users',
+        'promote_users',
+        'send_password_reset',
+        'yith_pos_manage_pos_options',
+        'yith_pos_manage_pos',
+    ];
+
+    foreach ($grant_caps as $grant_cap) {
+        $all_caps[$grant_cap] = true;
+    }
+
+    return $all_caps;
+}
+add_filter('user_has_cap', 'sbcc_permission_control_grant_user_management_caps', 20, 4);
+
+/**
+ * Second-pass admin bar cleanup to catch late-added nodes on the front end.
+ */
+function sbcc_permission_control_cleanup_admin_bar_frontend(): void
+{
+    if (!sbcc_permission_control_user_is_shop_manager()) {
+        return;
+    }
+
+    if (!is_admin_bar_showing()) {
+        return;
+    }
+
+    global $wp_admin_bar;
+
+    if (!$wp_admin_bar instanceof WP_Admin_Bar) {
+        return;
+    }
+
+    $nodes_to_remove = [
+        'edit',
+        'edit-page',
+        'elementor_edit_page',
+        'revslider',
+    ];
+
+    foreach ($nodes_to_remove as $node_id) {
+        $wp_admin_bar->remove_node($node_id);
+    }
+}
+add_action('wp_before_admin_bar_render', 'sbcc_permission_control_cleanup_admin_bar_frontend', 100);
+
+/**
+ * Allow shop managers to manage every role except administrators.
+ *
+ * @param array $roles Default roles allowed.
+ *
+ * @return array
+ */
+function sbcc_permission_control_extend_shop_manager_editable_roles(array $roles): array
+{
+    if (!sbcc_permission_control_user_is_shop_manager()) {
+        return $roles;
+    }
+
+    global $wp_roles;
+
+    if (!$wp_roles instanceof WP_Roles) {
+        $wp_roles = wp_roles();
+    }
+
+    $all_roles = array_keys($wp_roles->roles);
+    $allowed_roles = array_diff($all_roles, ['administrator']);
+
+    return array_values($allowed_roles);
+}
+add_filter('woocommerce_shop_manager_editable_roles', 'sbcc_permission_control_extend_shop_manager_editable_roles');
+
+/**
+ * Remove administrator count view from Users list for shop managers.
+ *
+ * @param array $views User list views.
+ *
+ * @return array
+ */
+function sbcc_permission_control_filter_user_views(array $views): array
+{
+    if (!sbcc_permission_control_user_is_shop_manager()) {
+        return $views;
+    }
+
+    unset($views['administrator']);
+
+    return $views;
+}
+add_filter('views_users', 'sbcc_permission_control_filter_user_views');
+
+/**
+ * Hide lingering admin bar items injected via JavaScript (e.g., Elementor) for shop managers.
+ */
+function sbcc_permission_control_hide_admin_bar_css(): void
+{
+    if (!sbcc_permission_control_user_is_shop_manager()) {
+        return;
+    }
+
+    ?>
+    <style>
+        #wp-admin-bar-elementor_edit_page {
+            display: none !important;
+        }
+    </style>
+    <?php
+}
+add_action('admin_head', 'sbcc_permission_control_hide_admin_bar_css');
+add_action('wp_head', 'sbcc_permission_control_hide_admin_bar_css');
